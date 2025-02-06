@@ -101,12 +101,12 @@ pub type Catalog = (
     Vec<PbSecret>,
 );
 
-pub type CatalogControllerRef = Arc<CatalogController>;
+pub type CatalogControllerRef<T> = Arc<CatalogController<T>>;
 
 /// `CatalogController` is the controller for catalog related operations, including database, schema, table, view, etc.
-pub struct CatalogController {
-    pub(crate) env: MetaSrvEnv,
-    pub(crate) inner: RwLock<CatalogControllerInner>,
+pub struct CatalogController<T> {
+    pub(crate) env: MetaSrvEnv<T>,
+    pub(crate) inner: RwLock<CatalogControllerInner<T>>,
 }
 
 #[derive(Clone, Default)]
@@ -128,8 +128,8 @@ pub struct ReleaseContext {
     pub(crate) removed_fragments: HashSet<FragmentId>,
 }
 
-impl CatalogController {
-    pub async fn new(env: MetaSrvEnv) -> MetaResult<Self> {
+impl <T> CatalogController<T> {
+    pub async fn new(env: MetaSrvEnv<T>) -> MetaResult<Self> {
         let meta_store = env.meta_store();
         let catalog_controller = Self {
             env,
@@ -145,17 +145,17 @@ impl CatalogController {
 
     /// Used in `NotificationService::subscribe`.
     /// Need to pay attention to the order of acquiring locks to prevent deadlock problems.
-    pub async fn get_inner_read_guard(&self) -> RwLockReadGuard<'_, CatalogControllerInner> {
+    pub async fn get_inner_read_guard(&self) -> RwLockReadGuard<'_, CatalogControllerInner<T>> {
         self.inner.read().await
     }
 
-    pub async fn get_inner_write_guard(&self) -> RwLockWriteGuard<'_, CatalogControllerInner> {
+    pub async fn get_inner_write_guard(&self) -> RwLockWriteGuard<'_, CatalogControllerInner<T>> {
         self.inner.write().await
     }
 }
 
-pub struct CatalogControllerInner {
-    pub(crate) db: DatabaseConnection,
+pub struct CatalogControllerInner<T> {
+    pub(crate) db: T,
     /// Registered finish notifiers for creating tables.
     ///
     /// `DdlController` will update this map, and pass the `tx` side to `CatalogController`.
@@ -164,7 +164,7 @@ pub struct CatalogControllerInner {
         HashMap<ObjectId, Vec<Sender<MetaResult<NotificationVersion>>>>,
 }
 
-impl CatalogController {
+impl <T> CatalogController<T> {
     pub(crate) async fn notify_frontend(
         &self,
         operation: NotificationOperation,
@@ -192,7 +192,7 @@ impl CatalogController {
     }
 }
 
-impl CatalogController {
+impl <T> CatalogController<T> {
     pub async fn finish_create_subscription_catalog(&self, subscription_id: u32) -> MetaResult<()> {
         let inner = self.inner.write().await;
         let txn = inner.db.begin().await?;
@@ -500,7 +500,7 @@ pub struct CatalogStats {
     pub actor_num: u64,
 }
 
-impl CatalogControllerInner {
+impl <T> CatalogControllerInner<T> {
     pub async fn snapshot(&self) -> MetaResult<(Catalog, Vec<PbUserInfo>)> {
         let databases = self.list_databases().await?;
         let schemas = self.list_schemas().await?;

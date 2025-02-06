@@ -23,7 +23,7 @@ use risingwave_meta_model as model;
 use risingwave_pb::hummock::PbHummockVersionDelta;
 use sea_orm::{DbErr, EntityTrait, QueryOrder, TransactionTrait};
 
-use crate::controller::SqlMetaStore;
+use crate::controller::MetaStore;
 
 const VERSION: u32 = 2;
 
@@ -50,13 +50,13 @@ macro_rules! define_set_metadata {
 
 risingwave_backup::for_all_metadata_models_v2!(define_set_metadata);
 
-pub struct MetaSnapshotV2Builder {
+pub struct MetaSnapshotV2Builder<T> {
     snapshot: MetaSnapshotV2,
-    meta_store: SqlMetaStore,
+    meta_store: MetaStore<T>,
 }
 
-impl MetaSnapshotV2Builder {
-    pub fn new(meta_store: SqlMetaStore) -> Self {
+impl <T> MetaSnapshotV2Builder<T> {
+    pub fn new(meta_store: MetaStore<T>) -> Self {
         Self {
             snapshot: MetaSnapshotV2::default(),
             meta_store,

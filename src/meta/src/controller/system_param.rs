@@ -32,7 +32,7 @@ use tokio::sync::oneshot::Sender;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
-use crate::controller::SqlMetaStore;
+use crate::controller::MetaStore;
 use crate::manager::{LocalNotification, NotificationManagerRef};
 use crate::{MetaError, MetaResult};
 
@@ -134,7 +134,7 @@ for_all_params!(impl_system_params_to_models);
 
 impl SystemParamsController {
     pub async fn new(
-        sql_meta_store: SqlMetaStore,
+        sql_meta_store: MetaStore,
         notification_manager: NotificationManagerRef,
         init_params: PbSystemParams,
     ) -> MetaResult<Self> {

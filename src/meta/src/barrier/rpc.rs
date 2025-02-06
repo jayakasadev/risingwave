@@ -85,13 +85,13 @@ struct ControlStreamNode {
     handle: StreamingControlHandle,
 }
 
-pub(super) struct ControlStreamManager {
+pub(super) struct ControlStreamManager<T> {
     nodes: HashMap<WorkerId, ControlStreamNode>,
-    env: MetaSrvEnv,
+    env: MetaSrvEnv<T>,
 }
 
-impl ControlStreamManager {
-    pub(super) fn new(env: MetaSrvEnv) -> Self {
+impl <T> ControlStreamManager<T> {
+    pub(super) fn new(env: MetaSrvEnv<T>) -> Self {
         Self {
             nodes: Default::default(),
             env,
@@ -308,7 +308,7 @@ impl ControlStreamManager {
     }
 }
 
-impl ControlStreamManager {
+impl <T> ControlStreamManager<T> {
     /// Extract information from the loaded runtime barrier worker snapshot info, and inject the initial barrier.
     ///
     /// Return:
@@ -676,7 +676,7 @@ impl ControlStreamManager {
     }
 }
 
-impl GlobalBarrierWorkerContextImpl {
+impl <T> GlobalBarrierWorkerContextImpl<T> {
     pub(super) async fn new_control_stream_impl(
         &self,
         node: &WorkerNode,

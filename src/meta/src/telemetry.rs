@@ -122,6 +122,7 @@ impl TelemetryToProtobuf for MetaTelemetryReport {
                 MetaBackend::Sql
                 | MetaBackend::Sqlite
                 | MetaBackend::Postgres
+                | MetaBackend::MongoDB
                 | MetaBackend::Mysql => risingwave_pb::telemetry::MetaBackend::Rdb as i32,
             },
             node_count: Some(risingwave_pb::telemetry::NodeCount {

@@ -1642,6 +1642,7 @@ pub async fn create_iceberg_engine_table(
                 meta_store_database.clone()
             )
         }
+        MetaBackend::MongoDB => meta_store_host.clone(),
         MetaBackend::Sqlite | MetaBackend::Sql | MetaBackend::Mem => {
             bail!(
                 "Unsupported meta backend for iceberg engine table: {}",

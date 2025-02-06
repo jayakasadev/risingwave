@@ -177,6 +177,7 @@ pub enum MetaBackend {
     Sqlite,
     Postgres,
     Mysql,
+    MongoDB,
 }
 
 /// The section `[meta]` in `risingwave.toml`.

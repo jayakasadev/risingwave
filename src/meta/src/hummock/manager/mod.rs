@@ -134,7 +134,7 @@ macro_rules! start_measure_real_process_timer {
 }
 pub(crate) use start_measure_real_process_timer;
 
-use crate::controller::SqlMetaStore;
+use crate::controller::MetaStore;
 use crate::hummock::manager::compaction_group_manager::CompactionGroupManager;
 use crate::hummock::manager::worker::HummockManagerEventSender;
 
@@ -310,7 +310,7 @@ impl HummockManager {
         Ok(instance)
     }
 
-    fn meta_store_ref(&self) -> &SqlMetaStore {
+    fn meta_store_ref(&self) -> &MetaStore {
         self.env.meta_store_ref()
     }
 

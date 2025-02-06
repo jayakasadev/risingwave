@@ -710,7 +710,7 @@ mod tests {
     use risingwave_pb::hummock::rise_ctl_update_compaction_config_request::mutable_config::MutableConfig;
     use risingwave_pb::meta::table_fragments::Fragment;
 
-    use crate::controller::SqlMetaStore;
+    use crate::controller::MetaStore;
     use crate::hummock::commit_multi_var;
     use crate::hummock::error::Result;
     use crate::hummock::manager::compaction_group_manager::CompactionGroupManager;
@@ -724,7 +724,7 @@ mod tests {
         assert_eq!(inner.compaction_groups.len(), 2);
 
         async fn update_compaction_config(
-            meta: &SqlMetaStore,
+            meta: &MetaStore,
             inner: &mut CompactionGroupManager,
             cg_ids: &[u64],
             config_to_update: &[MutableConfig],
@@ -735,7 +735,7 @@ mod tests {
         }
 
         async fn insert_compaction_group_configs(
-            meta: &SqlMetaStore,
+            meta: &MetaStore,
             inner: &mut CompactionGroupManager,
             cg_ids: &[u64],
         ) {

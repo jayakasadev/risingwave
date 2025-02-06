@@ -44,6 +44,12 @@ impl From<sea_orm::DbErr> for MetadataModelError {
     }
 }
 
+impl From<mongodb::error::Error> for MetadataModelError {
+    fn from(err: mongodb::error::Error) -> Self {
+        MetadataModelError::MetaStoreError(MetaStoreError::Internal(err.into()))
+    }
+}
+
 // TODO: reduce boilerplate code
 
 #[async_trait::async_trait]

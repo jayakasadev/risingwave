@@ -77,7 +77,7 @@ pub(super) trait GlobalBarrierWorkerContext: Send + Sync + 'static {
     ) -> MetaResult<Option<DatabaseRuntimeInfoSnapshot>>;
 }
 
-pub(super) struct GlobalBarrierWorkerContextImpl {
+pub(super) struct GlobalBarrierWorkerContextImpl<T> {
     scheduled_barriers: ScheduledBarriers,
 
     status: Arc<ArcSwap<BarrierManagerStatus>>,
@@ -90,10 +90,10 @@ pub(super) struct GlobalBarrierWorkerContextImpl {
 
     scale_controller: ScaleControllerRef,
 
-    pub(super) env: MetaSrvEnv,
+    pub(super) env: MetaSrvEnv<T>,
 }
 
-impl GlobalBarrierWorkerContextImpl {
+impl <T> GlobalBarrierWorkerContextImpl<T> {
     pub(super) fn new(
         scheduled_barriers: ScheduledBarriers,
         status: Arc<ArcSwap<BarrierManagerStatus>>,
@@ -101,7 +101,7 @@ impl GlobalBarrierWorkerContextImpl {
         hummock_manager: HummockManagerRef,
         source_manager: SourceManagerRef,
         scale_controller: ScaleControllerRef,
-        env: MetaSrvEnv,
+        env: MetaSrvEnv<T>,
     ) -> Self {
         Self {
             scheduled_barriers,

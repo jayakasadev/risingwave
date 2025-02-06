@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::any::TypeId;
+use mongodb::Client;
 use super::*;
 
 pub(crate) async fn update_internal_tables(
@@ -44,12 +46,14 @@ pub(crate) async fn update_internal_tables(
     Ok(())
 }
 
-impl CatalogController {
+impl <T> CatalogController<T> {
     pub(crate) async fn init(&self) -> MetaResult<()> {
         self.table_catalog_cdc_table_id_update().await?;
         Ok(())
     }
+}
 
+impl <T: DatabaseConnection> CatalogController<T> {
     /// Fill in the `cdc_table_id` field for Table with empty `cdc_table_id` and parent Source job.
     /// NOTES: We assume Table with a parent Source job is a CDC table
     pub(crate) async fn table_catalog_cdc_table_id_update(&self) -> MetaResult<()> {

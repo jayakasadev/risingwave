@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::any::TypeId;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
+use mongodb::Client;
+use mongodb::options::{ClientOptions, ServerApi, ServerApiVersion};
 use risingwave_common::hash::VnodeCount;
 use risingwave_common::util::epoch::Epoch;
 use risingwave_meta_model::{
@@ -58,15 +61,21 @@ impl From<sea_orm::DbErr> for MetaError {
     }
 }
 
+impl From<mongodb::error::Error> for MetaError {
+    fn from(err: mongodb::error::Error) -> Self {
+        anyhow!(err).into()
+    }
+}
+
 #[derive(Clone)]
-pub struct SqlMetaStore {
-    pub conn: DatabaseConnection,
+pub struct MetaStore<T> {
+    pub conn: T,
     pub endpoint: String,
 }
 
-impl SqlMetaStore {
+impl <T> MetaStore<T> {
     /// Connect to the SQL meta store based on the given configuration.
-    pub async fn connect(backend: MetaStoreBackend) -> Result<Self, sea_orm::DbErr> {
+    pub async fn connect<E>(backend: MetaStoreBackend) -> Result<Self, E> {
         const MAX_DURATION: Duration = Duration::new(u64::MAX / 4, 0);
 
         #[easy_ext::ext]
@@ -123,6 +132,19 @@ impl SqlMetaStore {
                 let conn = sea_orm::Database::connect(options).await?;
                 Self { conn, endpoint }
             }
+            MetaStoreBackend::MongoDB { endpoint } => {
+                // Parse connection options from uri
+                let mut options = ClientOptions::parse(endpoint).await?;
+                // Set the server_api field of the client_options object to Stable API version 1
+                let server_api = ServerApi::builder().version(ServerApiVersion::V1).build();
+                options.server_api = Some(server_api);
+                // Create a new client and connect to the server
+                let conn = Client::with_options(options)?;
+                Self {
+                    conn,
+                    endpoint
+                }
+            }
         })
     }
 
@@ -132,7 +154,9 @@ impl SqlMetaStore {
         Migrator::up(&this.conn, None).await.unwrap();
         this
     }
+}
 
+impl MetaStore<DatabaseConnection> {
     /// Check whether the cluster, which uses SQL as the backend, is a new cluster.
     /// It determines this by inspecting the applied migrations. If the migration `m20230908_072257_init` has been applied,
     /// then it is considered an old cluster.
@@ -162,6 +186,17 @@ impl SqlMetaStore {
             .await
             .context("failed to upgrade models in meta store")?;
 
+        Ok(cluster_first_launch)
+    }
+}
+
+impl MetaStore<Client> {
+    async fn is_first_launch(&self) -> MetaResult<bool> {
+        Ok(true)
+    }
+
+    pub async fn up(&self) -> MetaResult<bool> {
+        let cluster_first_launch = self.is_first_launch().await?;
         Ok(cluster_first_launch)
     }
 }

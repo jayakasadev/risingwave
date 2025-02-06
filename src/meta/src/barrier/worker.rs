@@ -63,7 +63,7 @@ use crate::{MetaError, MetaResult};
 /// accepting [`crate::barrier::command::Command`] that carries info to build `Mutation`. To keep the consistency between
 /// barrier manager and meta store, some actions like "drop materialized view" or "create mv on mv"
 /// must be done in barrier manager transactional using [`crate::barrier::command::Command`].
-pub(super) struct GlobalBarrierWorker<C> {
+pub(super) struct GlobalBarrierWorker<C, T> {
     /// Enable recovery or not when failover.
     enable_recovery: bool,
 
@@ -75,7 +75,7 @@ pub(super) struct GlobalBarrierWorker<C> {
 
     pub(super) context: Arc<C>,
 
-    env: MetaSrvEnv,
+    env: MetaSrvEnv<T>,
 
     checkpoint_control: CheckpointControl,
 
@@ -89,14 +89,14 @@ pub(super) struct GlobalBarrierWorker<C> {
 
     sink_manager: SinkCoordinatorManager,
 
-    control_stream_manager: ControlStreamManager,
+    control_stream_manager: ControlStreamManager<T>,
 }
 
-impl GlobalBarrierWorker<GlobalBarrierWorkerContextImpl> {
+impl <T> GlobalBarrierWorker<GlobalBarrierWorkerContextImpl<T>, T> {
     /// Create a new [`crate::barrier::worker::GlobalBarrierWorker`].
     pub async fn new(
         scheduled_barriers: schedule::ScheduledBarriers,
-        env: MetaSrvEnv,
+        env: MetaSrvEnv<T>,
         metadata_manager: MetadataManager,
         hummock_manager: HummockManagerRef,
         source_manager: SourceManagerRef,
@@ -230,7 +230,7 @@ impl GlobalBarrierWorker<GlobalBarrierWorkerContextImpl> {
     }
 }
 
-impl<C: GlobalBarrierWorkerContext> GlobalBarrierWorker<C> {
+impl<C: GlobalBarrierWorkerContext, T> GlobalBarrierWorker<C, T> {
     async fn run_inner(mut self, mut shutdown_rx: Receiver<()>) {
         let (local_notification_tx, mut local_notification_rx) =
             tokio::sync::mpsc::unbounded_channel();
@@ -406,7 +406,7 @@ impl<C: GlobalBarrierWorkerContext> GlobalBarrierWorker<C> {
     }
 }
 
-impl<C: GlobalBarrierWorkerContext> GlobalBarrierWorker<C> {
+impl<C: GlobalBarrierWorkerContext, T> GlobalBarrierWorker<C, T> {
     /// We need to make sure there are no changes when doing recovery
     pub async fn clear_on_err(&mut self, err: &MetaError) {
         // join spawned completing command to finish no matter it succeeds or not.
@@ -468,7 +468,7 @@ impl<C: GlobalBarrierWorkerContext> GlobalBarrierWorker<C> {
     }
 }
 
-impl<C: GlobalBarrierWorkerContext> GlobalBarrierWorker<C> {
+impl<C: GlobalBarrierWorkerContext, T> GlobalBarrierWorker<C, T> {
     /// Set barrier manager status.
     async fn failure_recovery(&mut self, err: MetaError) {
         self.clear_on_err(&err).await;
@@ -529,9 +529,9 @@ impl<C: GlobalBarrierWorkerContext> GlobalBarrierWorker<C> {
     }
 }
 
-impl<C> GlobalBarrierWorker<C> {
+impl<C, T> GlobalBarrierWorker<C,T> {
     /// Send barrier-complete-rpc and wait for responses from all CNs
-    pub(super) fn report_collect_failure(env: &MetaSrvEnv, error: &MetaError) {
+    pub(super) fn report_collect_failure(env: &MetaSrvEnv<T>, error: &MetaError) {
         // Record failure in event log.
         use risingwave_pb::meta::event_log;
         let event = event_log::EventCollectBarrierFail {
@@ -584,7 +584,7 @@ mod retry_strategy {
 pub(crate) use retry_strategy::*;
 use risingwave_common::error::tonic::extra::{Score, ScoredError};
 
-impl<C: GlobalBarrierWorkerContext> GlobalBarrierWorker<C> {
+impl<C: GlobalBarrierWorkerContext, T> GlobalBarrierWorker<C, T> {
     /// Recovery the whole cluster from the latest epoch.
     ///
     /// If `paused_reason` is `Some`, all data sources (including connectors and DMLs) will be

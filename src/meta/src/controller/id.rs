@@ -14,7 +14,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-
+use mongodb::Client;
 use risingwave_meta_model::prelude::{Actor, Fragment};
 use risingwave_meta_model::{actor, fragment};
 use sea_orm::sea_query::{Expr, Func};
@@ -35,9 +35,9 @@ pub mod IdCategory {
     pub const Fragment: IdCategoryType = 2;
     pub const Actor: IdCategoryType = 3;
 }
-pub struct IdGenerator<const TYPE: IdCategoryType>(AtomicU64);
+pub struct IdGenerator<const TYPE: IdCategoryType, T>(AtomicU64);
 
-impl<const TYPE: IdCategoryType> IdGenerator<TYPE> {
+impl<const TYPE: IdCategoryType> IdGenerator<TYPE, DatabaseConnection> {
     pub async fn new(conn: &DatabaseConnection) -> MetaResult<Self> {
         let id: i32 = match TYPE {
             IdCategory::Table => {
@@ -70,24 +70,62 @@ impl<const TYPE: IdCategoryType> IdGenerator<TYPE> {
 
         Ok(Self(AtomicU64::new(id as u64)))
     }
+}
 
+impl<const TYPE: IdCategoryType> IdGenerator<TYPE, Client> {
+    pub async fn new(conn: &Client) -> MetaResult<Self> {
+        let id: i32 = match TYPE {
+            IdCategory::Table => {
+                // Since we are using object pk to generate id for tables, here we just implement a dummy
+                // id generator and refill it later when inserting the table.
+                0
+            }
+            // TODO implement
+            IdCategory::Fragment => Fragment::find()
+                .select_only()
+                .expr(Func::if_null(
+                    Expr::col(fragment::Column::FragmentId).max().add(1),
+                    1,
+                ))
+                .into_tuple()
+                .one(conn)
+                .await?
+                .unwrap_or_default(),
+            IdCategory::Actor => Actor::find()
+                .select_only()
+                .expr(Func::if_null(
+                    Expr::col(actor::Column::ActorId).max().add(1),
+                    1,
+                ))
+                .into_tuple()
+                .one(conn)
+                .await?
+                .unwrap_or_default(),
+            _ => unreachable!("IdGeneratorV2 only supports Table, Fragment, and Actor"),
+        };
+
+        Ok(Self(AtomicU64::new(id as u64)))
+    }
+}
+
+impl<const TYPE: IdCategoryType, T> IdGenerator<TYPE, T> {
     pub fn generate_interval(&self, interval: u64) -> u64 {
         self.0.fetch_add(interval, Ordering::Relaxed)
     }
 }
 
-pub type IdGeneratorManagerRef = Arc<IdGeneratorManager>;
+pub type IdGeneratorManagerRef<T> = Arc<IdGeneratorManager<T>>;
 
 /// `IdGeneratorManager` is a manager for three id generators: `tables`, `fragments`, and `actors`. Note that this is just a
 /// workaround for the current implementation of `IdGenerator`. We should refactor it later.
-pub struct IdGeneratorManager {
-    pub tables: Arc<IdGenerator<{ IdCategory::Table }>>,
-    pub fragments: Arc<IdGenerator<{ IdCategory::Fragment }>>,
-    pub actors: Arc<IdGenerator<{ IdCategory::Actor }>>,
+pub struct IdGeneratorManager<T> {
+    pub tables: Arc<IdGenerator<{ IdCategory::Table }, T>>,
+    pub fragments: Arc<IdGenerator<{ IdCategory::Fragment }, T>>,
+    pub actors: Arc<IdGenerator<{ IdCategory::Actor }, T>>,
 }
 
-impl IdGeneratorManager {
-    pub async fn new(conn: &DatabaseConnection) -> MetaResult<Self> {
+impl <T> IdGeneratorManager<T> {
+    pub async fn new(conn: &T) -> MetaResult<Self> {
         Ok(Self {
             tables: Arc::new(IdGenerator::new(conn).await?),
             fragments: Arc::new(IdGenerator::new(conn).await?),

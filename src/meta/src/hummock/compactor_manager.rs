@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use fail::fail_point;
+use mongodb::bson::{doc, Document};
+use mongodb::Client;
 use parking_lot::RwLock;
+use sea_orm::DatabaseConnection;
 use risingwave_hummock_sdk::compact::statistics_compact_task;
 use risingwave_hummock_sdk::compact_task::CompactTask;
 use risingwave_hummock_sdk::{HummockCompactionTaskId, HummockContextId};
@@ -26,7 +30,7 @@ use risingwave_pb::hummock::{
     CancelCompactTask, CompactTaskAssignment, CompactTaskProgress, SubscribeCompactionEventResponse,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-
+use risingwave_meta_model::compaction_task::Model;
 use crate::manager::MetaSrvEnv;
 use crate::model::MetadataModelError;
 use crate::MetaResult;
@@ -134,17 +138,31 @@ pub struct CompactorManagerInner {
 }
 
 impl CompactorManagerInner {
-    pub async fn with_meta(env: MetaSrvEnv) -> MetaResult<Self> {
+    pub async fn with_meta<T>(env: MetaSrvEnv<T>) -> MetaResult<Self> {
         use risingwave_meta_model::compaction_task;
         use sea_orm::EntityTrait;
         // Retrieve the existing task assignments from metastore.
-        let task_assignment: Vec<CompactTaskAssignment> = compaction_task::Entity::find()
-            .all(&env.meta_store_ref().conn)
-            .await
-            .map_err(MetadataModelError::from)?
-            .into_iter()
-            .map(Into::into)
-            .collect();
+        let task_assignment: Vec<CompactTaskAssignment> = match TypeId::of::<T>() {
+            TypeId::of::<DatabaseConnection>() => {
+                compaction_task::Entity::find()
+                    .all(&env.meta_store_ref().conn)
+                    .await
+                    .map_err(MetadataModelError::from)?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect()
+            },
+            TypeId::of::<Client>() => {
+                &env.meta_store_ref().conn
+                    .default_database()
+                    .unwrap()
+                    .collection::<Model>("compaction_task")
+                    .find()
+                    .await?
+                    .map_err(MetadataModelError::from)?;
+                Vec::new()
+            }
+        };
         let mut manager = Self {
             task_expired_seconds: env.opts.compaction_task_max_progress_interval_secs,
             heartbeat_expired_seconds: env.opts.compaction_task_max_heartbeat_interval_secs,
@@ -394,7 +412,7 @@ pub struct CompactorManager {
 }
 
 impl CompactorManager {
-    pub async fn with_meta(env: MetaSrvEnv) -> MetaResult<Self> {
+    pub async fn with_meta<T>(env: MetaSrvEnv<T>) -> MetaResult<Self> {
         let inner = CompactorManagerInner::with_meta(env).await?;
 
         Ok(Self {
