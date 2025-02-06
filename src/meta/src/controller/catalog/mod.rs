@@ -27,6 +27,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use itertools::Itertools;
+use mongodb::Client;
 use risingwave_common::catalog::{TableOption, DEFAULT_SCHEMA_NAME, SYSTEM_SCHEMAS};
 use risingwave_common::current_cluster_version;
 use risingwave_common::secret::LocalSecretManager;
@@ -101,10 +102,10 @@ pub type Catalog = (
     Vec<PbSecret>,
 );
 
-pub type CatalogControllerRef<T> = Arc<CatalogController<T>>;
+pub type CatalogControllerRef<T, U> = Arc<CatalogController<T, U>>;
 
 /// `CatalogController` is the controller for catalog related operations, including database, schema, table, view, etc.
-pub struct CatalogController<T> {
+pub struct CatalogController<T, U> {
     pub(crate) env: MetaSrvEnv<T>,
     pub(crate) inner: RwLock<CatalogControllerInner<T>>,
 }
@@ -128,7 +129,7 @@ pub struct ReleaseContext {
     pub(crate) removed_fragments: HashSet<FragmentId>,
 }
 
-impl <T> CatalogController<T> {
+impl <T, U> CatalogController<T, U> {
     pub async fn new(env: MetaSrvEnv<T>) -> MetaResult<Self> {
         let meta_store = env.meta_store();
         let catalog_controller = Self {
@@ -164,7 +165,7 @@ pub struct CatalogControllerInner<T> {
         HashMap<ObjectId, Vec<Sender<MetaResult<NotificationVersion>>>>,
 }
 
-impl <T> CatalogController<T> {
+impl <T, U> CatalogController<T, U> {
     pub(crate) async fn notify_frontend(
         &self,
         operation: NotificationOperation,
@@ -192,7 +193,8 @@ impl <T> CatalogController<T> {
     }
 }
 
-impl <T> CatalogController<T> {
+// TODO add mongodb
+impl CatalogController<DatabaseConnection, DatabaseTransaction> {
     pub async fn finish_create_subscription_catalog(&self, subscription_id: u32) -> MetaResult<()> {
         let inner = self.inner.write().await;
         let txn = inner.db.begin().await?;
@@ -534,6 +536,28 @@ impl <T> CatalogControllerInner<T> {
         ))
     }
 
+    pub(crate) fn register_finish_notifier(
+        &mut self,
+        id: i32,
+        sender: Sender<MetaResult<NotificationVersion>>,
+    ) {
+        self.creating_table_finish_notifier
+            .entry(id)
+            .or_default()
+            .push(sender);
+    }
+
+    pub(crate) fn notify_finish_failed(&mut self, err: &MetaError) {
+        for tx in take(&mut self.creating_table_finish_notifier)
+            .into_values()
+            .flatten()
+        {
+            let _ = tx.send(Err(err.clone()));
+        }
+    }
+}
+
+impl CatalogControllerInner<DatabaseConnection> {
     pub async fn stats(&self) -> MetaResult<CatalogStats> {
         let mut table_num_map: HashMap<_, _> = Table::find()
             .select_only()
@@ -801,17 +825,6 @@ impl <T> CatalogControllerInner<T> {
             .collect())
     }
 
-    pub(crate) fn register_finish_notifier(
-        &mut self,
-        id: i32,
-        sender: Sender<MetaResult<NotificationVersion>>,
-    ) {
-        self.creating_table_finish_notifier
-            .entry(id)
-            .or_default()
-            .push(sender);
-    }
-
     pub(crate) async fn streaming_job_is_finished(&mut self, id: i32) -> MetaResult<bool> {
         let status = StreamingJob::find()
             .select_only()
@@ -828,13 +841,305 @@ impl <T> CatalogControllerInner<T> {
             })
     }
 
-    pub(crate) fn notify_finish_failed(&mut self, err: &MetaError) {
-        for tx in take(&mut self.creating_table_finish_notifier)
-            .into_values()
-            .flatten()
-        {
-            let _ = tx.send(Err(err.clone()));
+    pub async fn list_time_travel_table_ids(&self) -> MetaResult<Vec<TableId>> {
+        let table_ids: Vec<TableId> = Table::find()
+            .select_only()
+            .filter(table::Column::TableType.is_in(vec![
+                TableType::Table,
+                TableType::MaterializedView,
+                TableType::Index,
+            ]))
+            .column(table::Column::TableId)
+            .into_tuple()
+            .all(&self.db)
+            .await?;
+        Ok(table_ids)
+    }
+}
+
+impl CatalogControllerInner<Client> {
+
+    pub async fn stats(&self) -> MetaResult<CatalogStats> {
+        let mut table_num_map: HashMap<_, _> = Table::find()
+            .select_only()
+            .column(table::Column::TableType)
+            .column_as(table::Column::TableId.count(), "num")
+            .group_by(table::Column::TableType)
+            .having(table::Column::TableType.ne(TableType::Internal))
+            .into_tuple::<(TableType, i64)>()
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|(table_type, num)| (table_type, num as u64))
+            .collect();
+
+        let source_num = Source::find().count(&self.db).await?;
+        let sink_num = Sink::find().count(&self.db).await?;
+        let function_num = Function::find().count(&self.db).await?;
+        let streaming_job_num = StreamingJob::find().count(&self.db).await?;
+        let actor_num = Actor::find().count(&self.db).await?;
+
+        Ok(CatalogStats {
+            table_num: table_num_map.remove(&TableType::Table).unwrap_or(0),
+            mview_num: table_num_map
+                .remove(&TableType::MaterializedView)
+                .unwrap_or(0),
+            index_num: table_num_map.remove(&TableType::Index).unwrap_or(0),
+            source_num,
+            sink_num,
+            function_num,
+            streaming_job_num,
+            actor_num,
+        })
+    }
+
+    async fn list_databases(&self) -> MetaResult<Vec<PbDatabase>> {
+        let db_objs = Database::find()
+            .find_also_related(Object)
+            .all(&self.db)
+            .await?;
+        Ok(db_objs
+            .into_iter()
+            .map(|(db, obj)| ObjectModel(db, obj.unwrap()).into())
+            .collect())
+    }
+
+    async fn list_schemas(&self) -> MetaResult<Vec<PbSchema>> {
+        let schema_objs = Schema::find()
+            .find_also_related(Object)
+            .all(&self.db)
+            .await?;
+
+        Ok(schema_objs
+            .into_iter()
+            .map(|(schema, obj)| ObjectModel(schema, obj.unwrap()).into())
+            .collect())
+    }
+
+    async fn list_users(&self) -> MetaResult<Vec<PbUserInfo>> {
+        let mut user_infos: Vec<PbUserInfo> = User::find()
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect();
+
+        for user_info in &mut user_infos {
+            user_info.grant_privileges = get_user_privilege(user_info.id as _, &self.db).await?;
         }
+        Ok(user_infos)
+    }
+
+    /// `list_all_tables` return all tables and internal tables.
+    pub async fn list_all_state_tables(&self) -> MetaResult<Vec<PbTable>> {
+        let table_objs = Table::find()
+            .find_also_related(Object)
+            .all(&self.db)
+            .await?;
+
+        Ok(table_objs
+            .into_iter()
+            .map(|(table, obj)| ObjectModel(table, obj.unwrap()).into())
+            .collect())
+    }
+
+    /// `list_tables` return all `CREATED` tables, `CREATING` materialized views and internal tables that belong to them.
+    async fn list_tables(&self) -> MetaResult<Vec<PbTable>> {
+        let table_objs = Table::find()
+            .find_also_related(Object)
+            .join(JoinType::LeftJoin, object::Relation::StreamingJob.def())
+            .filter(
+                streaming_job::Column::JobStatus
+                    .eq(JobStatus::Created)
+                    .or(table::Column::TableType.eq(TableType::MaterializedView)),
+            )
+            .all(&self.db)
+            .await?;
+
+        let created_streaming_job_ids: Vec<ObjectId> = StreamingJob::find()
+            .select_only()
+            .column(streaming_job::Column::JobId)
+            .filter(streaming_job::Column::JobStatus.eq(JobStatus::Created))
+            .into_tuple()
+            .all(&self.db)
+            .await?;
+
+        let job_ids: HashSet<ObjectId> = table_objs
+            .iter()
+            .map(|(t, _)| t.table_id)
+            .chain(created_streaming_job_ids.iter().cloned())
+            .collect();
+
+        let internal_table_objs = Table::find()
+            .find_also_related(Object)
+            .filter(
+                table::Column::TableType
+                    .eq(TableType::Internal)
+                    .and(table::Column::BelongsToJobId.is_in(job_ids)),
+            )
+            .all(&self.db)
+            .await?;
+
+        Ok(table_objs
+            .into_iter()
+            .chain(internal_table_objs.into_iter())
+            .map(|(table, obj)| {
+                // Correctly set the stream job status for creating materialized views and internal tables.
+                let is_created = created_streaming_job_ids.contains(&table.table_id)
+                    || (table.table_type == TableType::Internal
+                    && created_streaming_job_ids.contains(&table.belongs_to_job_id.unwrap()));
+                let mut pb_table: PbTable = ObjectModel(table, obj.unwrap()).into();
+                pb_table.stream_job_status = if is_created {
+                    PbStreamJobStatus::Created.into()
+                } else {
+                    PbStreamJobStatus::Creating.into()
+                };
+                pb_table
+            })
+            .collect())
+    }
+
+    /// `list_sources` return all sources and `CREATED` ones if contains any streaming jobs.
+    async fn list_sources(&self) -> MetaResult<Vec<PbSource>> {
+        let mut source_objs = Source::find()
+            .find_also_related(Object)
+            .join(JoinType::LeftJoin, object::Relation::StreamingJob.def())
+            .filter(
+                streaming_job::Column::JobStatus
+                    .is_null()
+                    .or(streaming_job::Column::JobStatus.eq(JobStatus::Created)),
+            )
+            .all(&self.db)
+            .await?;
+
+        // filter out inner connector sources that are still under creating.
+        let created_table_ids: HashSet<TableId> = Table::find()
+            .select_only()
+            .column(table::Column::TableId)
+            .join(JoinType::InnerJoin, table::Relation::Object1.def())
+            .join(JoinType::LeftJoin, object::Relation::StreamingJob.def())
+            .filter(
+                table::Column::OptionalAssociatedSourceId
+                    .is_not_null()
+                    .and(streaming_job::Column::JobStatus.eq(JobStatus::Created)),
+            )
+            .into_tuple()
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .collect();
+        source_objs.retain_mut(|(source, _)| {
+            source.optional_associated_table_id.is_none()
+                || created_table_ids.contains(&source.optional_associated_table_id.unwrap())
+        });
+
+        Ok(source_objs
+            .into_iter()
+            .map(|(source, obj)| ObjectModel(source, obj.unwrap()).into())
+            .collect())
+    }
+
+    /// `list_sinks` return all `CREATED` sinks.
+    async fn list_sinks(&self) -> MetaResult<Vec<PbSink>> {
+        let sink_objs = Sink::find()
+            .find_also_related(Object)
+            .join(JoinType::LeftJoin, object::Relation::StreamingJob.def())
+            .filter(streaming_job::Column::JobStatus.eq(JobStatus::Created))
+            .all(&self.db)
+            .await?;
+
+        Ok(sink_objs
+            .into_iter()
+            .map(|(sink, obj)| ObjectModel(sink, obj.unwrap()).into())
+            .collect())
+    }
+
+    /// `list_subscriptions` return all `CREATED` subscriptions.
+    async fn list_subscriptions(&self) -> MetaResult<Vec<PbSubscription>> {
+        let subscription_objs = Subscription::find()
+            .find_also_related(Object)
+            .all(&self.db)
+            .await?;
+
+        Ok(subscription_objs
+            .into_iter()
+            .map(|(subscription, obj)| ObjectModel(subscription, obj.unwrap()).into())
+            .collect())
+    }
+
+    async fn list_views(&self) -> MetaResult<Vec<PbView>> {
+        let view_objs = View::find().find_also_related(Object).all(&self.db).await?;
+
+        Ok(view_objs
+            .into_iter()
+            .map(|(view, obj)| ObjectModel(view, obj.unwrap()).into())
+            .collect())
+    }
+
+    /// `list_indexes` return all `CREATED` indexes.
+    async fn list_indexes(&self) -> MetaResult<Vec<PbIndex>> {
+        let index_objs = Index::find()
+            .find_also_related(Object)
+            .join(JoinType::LeftJoin, object::Relation::StreamingJob.def())
+            .filter(streaming_job::Column::JobStatus.eq(JobStatus::Created))
+            .all(&self.db)
+            .await?;
+
+        Ok(index_objs
+            .into_iter()
+            .map(|(index, obj)| ObjectModel(index, obj.unwrap()).into())
+            .collect())
+    }
+
+    async fn list_connections(&self) -> MetaResult<Vec<PbConnection>> {
+        let conn_objs = Connection::find()
+            .find_also_related(Object)
+            .all(&self.db)
+            .await?;
+
+        Ok(conn_objs
+            .into_iter()
+            .map(|(conn, obj)| ObjectModel(conn, obj.unwrap()).into())
+            .collect())
+    }
+
+    pub async fn list_secrets(&self) -> MetaResult<Vec<PbSecret>> {
+        let secret_objs = Secret::find()
+            .find_also_related(Object)
+            .all(&self.db)
+            .await?;
+        Ok(secret_objs
+            .into_iter()
+            .map(|(secret, obj)| ObjectModel(secret, obj.unwrap()).into())
+            .collect())
+    }
+
+    async fn list_functions(&self) -> MetaResult<Vec<PbFunction>> {
+        let func_objs = Function::find()
+            .find_also_related(Object)
+            .all(&self.db)
+            .await?;
+
+        Ok(func_objs
+            .into_iter()
+            .map(|(func, obj)| ObjectModel(func, obj.unwrap()).into())
+            .collect())
+    }
+
+    pub(crate) async fn streaming_job_is_finished(&mut self, id: i32) -> MetaResult<bool> {
+        let status = StreamingJob::find()
+            .select_only()
+            .column(streaming_job::Column::JobStatus)
+            .filter(streaming_job::Column::JobId.eq(id))
+            .into_tuple::<JobStatus>()
+            .one(&self.db)
+            .await?;
+
+        status
+            .map(|status| status == JobStatus::Created)
+            .ok_or_else(|| {
+                MetaError::catalog_id_not_found("streaming job", "may have been cancelled/dropped")
+            })
     }
 
     pub async fn list_time_travel_table_ids(&self) -> MetaResult<Vec<TableId>> {
