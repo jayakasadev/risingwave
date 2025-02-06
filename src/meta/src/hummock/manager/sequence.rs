@@ -92,20 +92,20 @@ impl SequenceGenerator {
     }
 }
 
-pub async fn next_compaction_task_id(env: &MetaSrvEnv) -> Result<u64> {
+pub async fn next_compaction_task_id<T>(env: &MetaSrvEnv<T>) -> Result<u64> {
     env.hummock_seq.next_interval(COMPACTION_TASK_ID, 1).await
 }
 
-pub async fn next_meta_backup_id(env: &MetaSrvEnv) -> Result<u64> {
+pub async fn next_meta_backup_id<T>(env: &MetaSrvEnv<T>) -> Result<u64> {
     env.hummock_seq.next_interval(META_BACKUP_ID, 1).await
 }
 
-pub async fn next_compaction_group_id(env: &MetaSrvEnv) -> Result<u64> {
+pub async fn next_compaction_group_id<T>(env: &MetaSrvEnv<T>) -> Result<u64> {
     env.hummock_seq.next_interval(COMPACTION_GROUP_ID, 1).await
 }
 
-pub async fn next_sstable_object_id(
-    env: &MetaSrvEnv,
+pub async fn next_sstable_object_id<T>(
+    env: &MetaSrvEnv<T>,
     num: impl TryInto<u32> + Display + Copy,
 ) -> Result<u64> {
     let num: u32 = num
@@ -116,13 +116,13 @@ pub async fn next_sstable_object_id(
 
 #[cfg(test)]
 mod tests {
-    use crate::controller::SqlMetaStore;
+    use crate::controller::MetaStore;
     use crate::hummock::manager::sequence::{SequenceGenerator, COMPACTION_TASK_ID};
 
     #[cfg(not(madsim))]
     #[tokio::test]
     async fn test_seq_gen() {
-        let store = SqlMetaStore::for_test().await;
+        let store = MetaStore::for_test().await;
         let conn = store.conn.clone();
         let s = SequenceGenerator::new(conn);
         assert_eq!(1, s.next_interval(COMPACTION_TASK_ID, 1).await.unwrap());

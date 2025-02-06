@@ -62,13 +62,13 @@ impl BackupJobHandle {
     }
 }
 
-pub type BackupManagerRef = Arc<BackupManager>;
+pub type BackupManagerRef<T> = Arc<BackupManager<T>>;
 /// (url, dir)
 type StoreConfig = (String, String);
 
 /// `BackupManager` manages lifecycle of all existent backups and the running backup job.
-pub struct BackupManager {
-    env: MetaSrvEnv,
+pub struct BackupManager<T> {
+    env: MetaSrvEnv<T>,
     hummock_manager: HummockManagerRef,
     backup_store: ArcSwap<(ObjectStoreMetaSnapshotStorage, StoreConfig)>,
     /// Tracks the running backup job. Concurrent jobs is not supported.
@@ -79,9 +79,9 @@ pub struct BackupManager {
     latest_job_info: ArcSwap<(MetaBackupJobId, BackupJobStatus, String)>,
 }
 
-impl BackupManager {
+impl <T> BackupManager<T> {
     pub async fn new(
-        env: MetaSrvEnv,
+        env: MetaSrvEnv<T>,
         hummock_manager: HummockManagerRef,
         metrics: Arc<MetaMetrics>,
         store_url: &str,
@@ -148,7 +148,7 @@ impl BackupManager {
     }
 
     fn with_store(
-        env: MetaSrvEnv,
+        env: MetaSrvEnv<T>,
         hummock_manager: HummockManagerRef,
         meta_metrics: Arc<MetaMetrics>,
         backup_store: (ObjectStoreMetaSnapshotStorage, StoreConfig),
@@ -181,7 +181,7 @@ impl BackupManager {
     }
 
     #[cfg(test)]
-    pub async fn for_test(env: MetaSrvEnv, hummock_manager: HummockManagerRef) -> Self {
+    pub async fn for_test(env: MetaSrvEnv<T>, hummock_manager: HummockManagerRef) -> Self {
         Self::with_store(
             env,
             hummock_manager,
@@ -333,12 +333,12 @@ impl BackupManager {
 }
 
 /// `BackupWorker` creates a database snapshot.
-struct BackupWorker {
-    backup_manager: BackupManagerRef,
+struct BackupWorker<T> {
+    backup_manager: BackupManagerRef<T>,
 }
 
-impl BackupWorker {
-    fn new(backup_manager: BackupManagerRef) -> Self {
+impl <T> BackupWorker<T> {
+    fn new(backup_manager: BackupManagerRef<T>) -> Self {
         Self { backup_manager }
     }
 

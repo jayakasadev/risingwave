@@ -28,7 +28,7 @@ use crate::MetaResult;
 /// For test purposes, we count the number of times the license key file is reloaded.
 static RELOAD_TIMES: AtomicUsize = AtomicUsize::new(0);
 
-impl MetaSrvEnv {
+impl <T> MetaSrvEnv<T> {
     /// Spawn background tasks to watch the license key file and update the system parameter,
     /// if configured.
     pub fn may_start_watch_license_key_file(&self) -> MetaResult<Option<JoinHandle<()>>> {

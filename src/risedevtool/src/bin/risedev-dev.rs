@@ -30,7 +30,7 @@ use risedev::util::{begin_spin, complete_spin, fail_spin};
 use risedev::{
     generate_risedev_env, preflight_check, CompactorService, ComputeNodeService, ConfigExpander,
     ConfigureTmuxTask, DummyService, EnsureStopService, ExecuteContext, FrontendService,
-    GrafanaService, KafkaService, MetaNodeService, MinioService, MySqlService, PostgresService,
+    GrafanaService, KafkaService, MetaNodeService, MinioService, MongoDBService, MySqlService, PostgresService,
     PrometheusService, PubsubService, RedisService, SchemaRegistryService, ServiceConfig,
     SqlServerService, SqliteConfig, Task, TaskGroup, TempoService, RISEDEV_NAME,
 };
@@ -337,6 +337,25 @@ fn task_main(
                     }
                     ctx.pb
                         .set_message(format!("sqlserver {}:{}", c.address, c.port));
+                }
+                ServiceConfig::MongoDB(c) => {
+                    MongoDBService::new(c.clone()).execute(&mut ctx)?;
+                    if c.user_managed {
+                        let mut task = risedev::TcpReadyCheckTask::new(
+                            c.address.clone(),
+                            c.port,
+                            c.user_managed,
+                        )?;
+                        task.execute(&mut ctx)?;
+                    } else {
+                        let mut task = risedev::LogReadyCheckTask::new_all([
+                            "ready to accept connections", // also appears in init process
+                            "listening on IPv4 address",   // only appears when ready
+                        ])?;
+                        task.execute(&mut ctx)?;
+                    }
+                    ctx.pb
+                        .set_message(format!("mongodb {}:{}", c.address, c.port));
                 }
             }
 

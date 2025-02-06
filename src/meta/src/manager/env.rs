@@ -16,7 +16,9 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
+use mongodb::bson::doc;
+use mongodb::Client;
 use risingwave_common::config::{CompactionConfig, DefaultParallelism, ObjectStoreConfig};
 use risingwave_common::session_config::SessionConfig;
 use risingwave_common::system_param::reader::SystemParamsReader;
@@ -26,14 +28,12 @@ use risingwave_pb::meta::SystemParams;
 use risingwave_rpc_client::{
     FrontendClientPool, FrontendClientPoolRef, StreamClientPool, StreamClientPoolRef,
 };
-use sea_orm::EntityTrait;
+use sea_orm::{DatabaseConnection, EntityTrait};
 
-use crate::controller::id::{
-    IdGeneratorManager as SqlIdGeneratorManager, IdGeneratorManagerRef as SqlIdGeneratorManagerRef,
-};
+use crate::controller::id::{IdGeneratorManager, IdGeneratorManagerRef};
 use crate::controller::session_params::{SessionParamsController, SessionParamsControllerRef};
 use crate::controller::system_param::{SystemParamsController, SystemParamsControllerRef};
-use crate::controller::SqlMetaStore;
+use crate::controller::MetaStore;
 use crate::hummock::sequence::SequenceGenerator;
 use crate::manager::event_log::{start_event_log_manager, EventLogManagerRef};
 use crate::manager::{IdleManager, IdleManagerRef, NotificationManager, NotificationManagerRef};
@@ -43,9 +43,9 @@ use crate::MetaResult;
 /// [`MetaSrvEnv`] is the global environment in Meta service. The instance will be shared by all
 /// kind of managers inside Meta.
 #[derive(Clone)]
-pub struct MetaSrvEnv {
+pub struct MetaSrvEnv<T> {
     /// id generator manager.
-    id_gen_manager_impl: SqlIdGeneratorManagerRef,
+    id_gen_manager_impl: IdGeneratorManagerRef,
 
     /// system param manager.
     system_param_manager_impl: SystemParamsControllerRef,
@@ -54,7 +54,7 @@ pub struct MetaSrvEnv {
     session_param_manager_impl: SessionParamsControllerRef,
 
     /// meta store.
-    meta_store_impl: SqlMetaStore,
+    meta_store_impl: MetaStore<T>,
 
     /// notification manager.
     notification_manager: NotificationManagerRef,
@@ -339,12 +339,35 @@ impl MetaOpts {
     }
 }
 
-impl MetaSrvEnv {
+impl MetaSrvEnv<DatabaseConnection> {
+    async fn get_cluster_id(conn: &DatabaseConnection) -> MetaResult<Option<ClusterId>> {
+        let cluster_id = Cluster::find()
+            .one(&conn)
+            .await?
+            .map(|c| c.cluster_id.to_string().into());
+        Ok(cluster_id)
+    }
+}
+
+impl MetaSrvEnv<Client> {
+    async fn get_cluster_id(conn: &Client) -> MetaResult<Option<ClusterId>> {
+        let cluster_id = conn
+            .default_database()
+            .unwrap()
+            .collection("cluster")
+            .find_one(doc!{})
+            .await?
+            .map(|c| c.get_str("_id").unwrap().to_string().into());
+        Ok(cluster_id)
+    }
+}
+
+impl <T> MetaSrvEnv<T> {
     pub async fn new(
         opts: MetaOpts,
         mut init_system_params: SystemParams,
         init_session_config: SessionConfig,
-        meta_store_impl: SqlMetaStore,
+        meta_store_impl: MetaStore<T>,
     ) -> MetaResult<Self> {
         let idle_manager = Arc::new(IdleManager::new(opts.max_idle_ms));
         let stream_client_pool = Arc::new(StreamClientPool::new(1)); // typically no need for plural clients
@@ -358,7 +381,7 @@ impl MetaSrvEnv {
         // overwritten. So we simply reject this case.
         if opts.license_key_path.is_some()
             && init_system_params.license_key
-                != system_param::default::license_key_opt().map(Into::into)
+            != system_param::default::license_key_opt().map(Into::into)
         {
             bail!(
                 "argument `--license-key-path` (or env var `RW_LICENSE_KEY_PATH`) and \
@@ -377,11 +400,11 @@ impl MetaSrvEnv {
 
         let notification_manager =
             Arc::new(NotificationManager::new(meta_store_impl.clone()).await);
-        let cluster_id = Cluster::find()
-            .one(&meta_store_impl.conn)
-            .await?
-            .map(|c| c.cluster_id.to_string().into())
-            .unwrap();
+
+        let cluster_id = match MetaSrvEnv::get_cluster_id(&meta_store_impl.conn).await? {
+            Some(tracking_id) => tracking_id,
+            None => Err(anyhow!("unable to find cluster"))
+        };
 
         // For new clusters:
         // - the name of the object store needs to be prefixed according to the object id.
@@ -396,7 +419,7 @@ impl MetaSrvEnv {
                 notification_manager.clone(),
                 init_system_params,
             )
-            .await?,
+                .await?,
         );
         let session_param_controller = Arc::new(
             SessionParamsController::new(
@@ -404,10 +427,10 @@ impl MetaSrvEnv {
                 notification_manager.clone(),
                 init_session_config,
             )
-            .await?,
+                .await?,
         );
         Ok(Self {
-            id_gen_manager_impl: Arc::new(SqlIdGeneratorManager::new(&meta_store_impl.conn).await?),
+            id_gen_manager_impl: Arc::new(IdGeneratorManager::new(&meta_store_impl.conn).await?),
             system_param_manager_impl: system_param_controller,
             session_param_manager_impl: session_param_controller,
             meta_store_impl: meta_store_impl.clone(),
@@ -422,15 +445,15 @@ impl MetaSrvEnv {
         })
     }
 
-    pub fn meta_store(&self) -> SqlMetaStore {
+    pub fn meta_store(&self) -> MetaStore<T> {
         self.meta_store_impl.clone()
     }
 
-    pub fn meta_store_ref(&self) -> &SqlMetaStore {
+    pub fn meta_store_ref(&self) -> &MetaStore<T> {
         &self.meta_store_impl
     }
 
-    pub fn id_gen_manager(&self) -> &SqlIdGeneratorManagerRef {
+    pub fn id_gen_manager(&self) -> &IdGeneratorManagerRef {
         &self.id_gen_manager_impl
     }
 
@@ -484,7 +507,7 @@ impl MetaSrvEnv {
 }
 
 #[cfg(any(test, feature = "test"))]
-impl MetaSrvEnv {
+impl <T> MetaSrvEnv<T> {
     // Instance for test.
     pub async fn for_test() -> Self {
         Self::for_test_opts(MetaOpts::test(false)).await
@@ -495,7 +518,7 @@ impl MetaSrvEnv {
             opts,
             risingwave_common::system_param::system_params_for_test(),
             Default::default(),
-            SqlMetaStore::for_test().await,
+            MetaStore::for_test().await,
         )
         .await
         .unwrap()

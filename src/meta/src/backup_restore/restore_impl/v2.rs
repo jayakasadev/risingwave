@@ -23,7 +23,7 @@ use risingwave_backup::MetaSnapshotId;
 use sea_orm::DbErr;
 
 use crate::backup_restore::restore_impl::{Loader, Writer};
-use crate::controller::SqlMetaStore;
+use crate::controller::MetaStore;
 
 pub struct LoaderV2 {
     backup_store: MetaSnapshotStorageRef,
@@ -86,18 +86,18 @@ impl Loader<MetadataV2> for LoaderV2 {
     }
 }
 
-pub struct WriterModelV2ToMetaStoreV2 {
-    meta_store: SqlMetaStore,
+pub struct WriterModelV2ToMetaStoreV2<T> {
+    meta_store: MetaStore<T>,
 }
 
-impl WriterModelV2ToMetaStoreV2 {
-    pub fn new(meta_store: SqlMetaStore) -> Self {
+impl <T> WriterModelV2ToMetaStoreV2<T> {
+    pub fn new(meta_store: MetaStore<T>) -> Self {
         Self { meta_store }
     }
 }
 
 #[async_trait::async_trait]
-impl Writer<MetadataV2> for WriterModelV2ToMetaStoreV2 {
+impl <T> Writer<MetadataV2> for WriterModelV2ToMetaStoreV2<T> {
     async fn write(&self, target_snapshot: MetaSnapshot<MetadataV2>) -> BackupResult<()> {
         let metadata = target_snapshot.metadata;
         let db = &self.meta_store.conn;

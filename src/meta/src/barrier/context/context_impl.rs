@@ -36,7 +36,7 @@ use crate::hummock::CommitEpochInfo;
 use crate::stream::SourceChange;
 use crate::{MetaError, MetaResult};
 
-impl GlobalBarrierWorkerContext for GlobalBarrierWorkerContextImpl {
+impl <T> GlobalBarrierWorkerContext for GlobalBarrierWorkerContextImpl<T> {
     async fn commit_epoch(&self, commit_info: CommitEpochInfo) -> MetaResult<HummockVersionStats> {
         self.hummock_manager.commit_epoch(commit_info).await?;
         Ok(self.hummock_manager.get_version_stats().await)
@@ -99,16 +99,16 @@ impl GlobalBarrierWorkerContext for GlobalBarrierWorkerContextImpl {
     }
 }
 
-impl GlobalBarrierWorkerContextImpl {
+impl <T> GlobalBarrierWorkerContextImpl<T> {
     fn set_status(&self, new_status: BarrierManagerStatus) {
         self.status.store(Arc::new(new_status));
     }
 }
 
 impl CommandContext {
-    pub async fn wait_epoch_commit(
+    pub async fn wait_epoch_commit<T>(
         &self,
-        barrier_manager_context: &GlobalBarrierWorkerContextImpl,
+        barrier_manager_context: &GlobalBarrierWorkerContextImpl<T>,
     ) -> MetaResult<()> {
         let table_id = self.table_ids_to_commit.iter().next().cloned();
         // try wait epoch on an existing random table id
@@ -136,9 +136,9 @@ impl CommandContext {
 
     /// Do some stuffs after barriers are collected and the new storage version is committed, for
     /// the given command.
-    pub async fn post_collect(
+    pub async fn post_collect<T>(
         &self,
-        barrier_manager_context: &GlobalBarrierWorkerContextImpl,
+        barrier_manager_context: &GlobalBarrierWorkerContextImpl<T>,
     ) -> MetaResult<()> {
         let Some(command) = &self.command else {
             return Ok(());

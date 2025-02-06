@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-
+use mongodb::Client;
 use otlp_embedded::TraceServiceServer;
 use regex::Regex;
 use risingwave_common::monitor::{RouterExt, TcpConfig};
@@ -75,18 +75,18 @@ use risingwave_pb::meta::telemetry_info_service_server::TelemetryInfoServiceServ
 use risingwave_pb::meta::SystemParams;
 use risingwave_pb::user::user_service_server::UserServiceServer;
 use risingwave_rpc_client::ComputeClientPool;
-use sea_orm::{ConnectionTrait, DbBackend};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend};
 use thiserror_ext::AsReport;
 use tokio::sync::watch;
-
+use risingwave_meta::rpc::election::sql::MongoDBDriver;
 use crate::backup_restore::BackupManager;
 use crate::barrier::BarrierScheduler;
 use crate::controller::system_param::SystemParamsController;
-use crate::controller::SqlMetaStore;
+use crate::controller::MetaStore;
 use crate::hummock::HummockManager;
 use crate::manager::sink_coordination::SinkCoordinatorManager;
 use crate::manager::{IdleManager, MetaOpts, MetaSrvEnv};
-use crate::rpc::election::sql::{MySqlDriver, PostgresDriver, SqlBackendElectionClient};
+use crate::rpc::election::sql::{MySqlDriver, PostgresDriver, BackendElectionClient};
 use crate::rpc::metrics::{
     start_fragment_info_monitor, start_worker_info_monitor, GLOBAL_META_METRICS,
 };
@@ -127,7 +127,7 @@ pub async fn rpc_serve(
     init_session_config: SessionConfig,
     shutdown: CancellationToken,
 ) -> MetaResult<()> {
-    let meta_store_impl = SqlMetaStore::connect(meta_store_backend.clone()).await?;
+    let meta_store_impl = MetaStore::connect(meta_store_backend.clone()).await?;
 
     let election_client = match meta_store_backend {
         MetaStoreBackend::Mem => {
@@ -139,16 +139,25 @@ pub async fn rpc_serve(
         MetaStoreBackend::Sql { .. } => {
             // Init election client.
             let id = address_info.advertise_addr.clone();
-            let conn = meta_store_impl.conn.clone();
+            let conn = meta_store_impl.conn().clone();
             let election_client: ElectionClientRef = match conn.get_database_backend() {
                 DbBackend::Sqlite => Arc::new(DummyElectionClient::new(id)),
                 DbBackend::Postgres => {
-                    Arc::new(SqlBackendElectionClient::new(id, PostgresDriver::new(conn)))
+                    Arc::new(BackendElectionClient::new(id, PostgresDriver::new(conn)))
                 }
                 DbBackend::MySql => {
-                    Arc::new(SqlBackendElectionClient::new(id, MySqlDriver::new(conn)))
+                    Arc::new(BackendElectionClient::new(id, MySqlDriver::new(conn)))
                 }
             };
+            election_client.init().await?;
+
+            election_client
+        }
+        MetaStoreBackend::MongoDB { .. } => {
+            // init election client.
+            let id = address_info.advertise_addr.clone();
+            let conn = meta_store_impl.conn().unwrap().clone();
+            let election_client: ElectionClientRef = Arc::new(BackendElectionClient::new(id, MongoDBDriver::new(conn)));
             election_client.init().await?;
 
             election_client
@@ -173,8 +182,8 @@ pub async fn rpc_serve(
 ///
 /// Returns when the `shutdown` token is triggered, or when leader status is lost, or if the leader
 /// service fails to start.
-pub async fn rpc_serve_with_store(
-    meta_store_impl: SqlMetaStore,
+pub async fn rpc_serve_with_store<T>(
+    meta_store_impl: MetaStore<T>,
     election_client: ElectionClientRef,
     address_info: AddressInfo,
     max_cluster_heartbeat_interval: Duration,
@@ -301,8 +310,8 @@ pub async fn start_service_as_election_follower(
 /// Starts all services needed for the meta leader node.
 ///
 /// Returns when the `shutdown` token is triggered, or if the service initialization fails.
-pub async fn start_service_as_election_leader(
-    meta_store_impl: SqlMetaStore,
+pub async fn start_service_as_election_leader<T>(
+    meta_store_impl: MetaStore<T>,
     address_info: AddressInfo,
     max_cluster_heartbeat_interval: Duration,
     opts: MetaOpts,
