@@ -14,6 +14,7 @@
 
 use risingwave_pb::common::worker_node::PbState;
 use risingwave_pb::common::{PbWorkerNode, PbWorkerType};
+use std::str::FromStr;
 use sea_orm::entity::prelude::*;
 use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
@@ -127,3 +128,27 @@ impl Related<super::worker_property::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MongoDB {
+    pub _id: WorkerId<>,
+    pub worker_type: WorkerType,
+    pub host: String,
+    pub port: i32,
+    pub status: WorkerStatus,
+    pub transaction_id: Option<TransactionId>,
+    pub worker_property: Option<super::worker_property::MongoDB>
+}
+
+impl From<MongoDB> for Model {
+    fn from(mdb: MongoDB) -> Self {
+        Model {
+            worker_id: mdb._id,
+            worker_type: mdb.worker_type,
+            host: mdb.host,
+            port: mdb.port,
+            status: mdb.status,
+            transaction_id: mdb.transaction_id,
+        }
+    }
+}

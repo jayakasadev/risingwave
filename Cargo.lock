@@ -11585,6 +11585,8 @@ dependencies = [
 name = "risingwave_meta_model"
 version = "2.3.0-alpha"
 dependencies = [
+ "futures",
+ "mongodb",
  "prost 0.13.4",
  "risingwave_common",
  "risingwave_pb",

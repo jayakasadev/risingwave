@@ -14,7 +14,6 @@
 
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
-
 use crate::WorkerId;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
@@ -22,6 +21,16 @@ use crate::WorkerId;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub worker_id: WorkerId,
+    pub parallelism: i32,
+    pub is_streaming: bool,
+    pub is_serving: bool,
+    pub is_unschedulable: bool,
+    pub internal_rpc_host_addr: Option<String>,
+    pub resource_group: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MongoDB {
     pub parallelism: i32,
     pub is_streaming: bool,
     pub is_serving: bool,
@@ -49,3 +58,17 @@ impl Related<super::worker::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+impl From<MongoDB> for Model {
+    fn from(mdb: MongoDB) -> Self {
+        Model {
+            worker_id: Default::default(),
+            parallelism: mdb.parallelism,
+            is_streaming: mdb.is_streaming,
+            is_serving: mdb.is_serving,
+            is_unschedulable: mdb.is_unschedulable,
+            internal_rpc_host_addr: mdb.internal_rpc_host_addr,
+            resource_group: mdb.resource_group,
+        }
+    }
+}

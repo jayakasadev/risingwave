@@ -239,14 +239,15 @@ impl Driver for MongoDBDriver {
             .find(doc! {"_id.service": service_name})
             .await?;
 
-        let mut rows: Vec<ElectionRow> = Vec::new();
-        while let Some(query_result) = cursor.next().await {
-            let doc = query_result?;
-            rows.push(ElectionRow{
-                service: doc.get_str("service").unwrap().to_string(),
-                id: doc.get_str("_id").unwrap().to_string(),
-            });
-        }
+        let rows: Vec<ElectionRow> = cursor.map(
+            |query_result| {
+                let doc = query_result.unwrap();
+                ElectionRow{
+                    service: doc.get_str("service").unwrap().to_string(),
+                    id: doc.get_str("_id").unwrap().to_string(),
+                }
+            }
+        ).await?;
 
         Ok(rows)
     }
@@ -254,13 +255,13 @@ impl Driver for MongoDBDriver {
     async fn resign(&self, service_name: &str, id: &str) -> MetaResult<()> {
         let mut session: ClientSession = self.conn.start_session().await?;
 
-        let db = session.client().default_database().unwrap();
-
         // incase backend is a replica-set, ensure that the transaction propagated through completely
         session.start_transaction()
             .read_concern(ReadConcern::majority())
             .write_concern(WriteConcern::majority())
             .await?;
+
+        let db = session.client().default_database().unwrap();
 
         let election_table = db.collection::<Document>(Self::election_table_name());
         let member_table = db.collection::<Document>(Self::member_table_name());
