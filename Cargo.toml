@@ -42,7 +42,7 @@ members = [
     "src/risedevtool",
     "src/risedevtool/config",
     "src/rpc_client",
-    "src/sqlparser",
+    "src/risingwave_sqlparser",
     "src/storage",
     "src/storage/backup",
     "src/storage/compactor",
@@ -262,7 +262,7 @@ risingwave_object_store = { path = "./src/object_store" }
 risingwave_pb = { path = "./src/prost" }
 risingwave_rpc_client = { path = "./src/rpc_client" }
 risingwave_rt = { path = "./src/utils/runtime" }
-risingwave_sqlparser = { path = "./src/sqlparser" }
+risingwave_sqlparser = { path = "./src/risingwave_sqlparser" }
 risingwave_sqlsmith = { path = "./src/tests/sqlsmith" }
 risingwave_storage = { path = "./src/storage" }
 risingwave_stream = { path = "./src/stream" }

@@ -15,7 +15,7 @@ header:
   paths-ignore:
     - "**/gen/**"
     - "**/*.d.ts"
-    - "src/sqlparser/**/*.rs"
+    - "src/risingwave_sqlparser/**/*.rs"
     - "java/connector-node/risingwave-source-cdc/src/main/java/com/risingwave/connector/cdc/debezium/internal/*.java"
     - "java/connector-node/risingwave-sink-iceberg/src/main/java/org/apache/iceberg/**/*.java"
     - "src/meta/model/migration/**/*.rs"

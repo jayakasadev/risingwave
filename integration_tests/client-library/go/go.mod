@@ -1,6 +1,8 @@
 module github.com/risingwave/risingwave-test/client-library-test/go
 
-go 1.20
+go 1.23.0
+
+toolchain go1.24.3
 
 require (
 	github.com/jackc/pgx/v5 v5.5.4
